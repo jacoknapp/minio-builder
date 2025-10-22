@@ -16,25 +16,16 @@ env:
   IMAGE_NAME: ghcr.io/jacoknapp/minio
 
 jobs:
-  build-and-push:
-    name: Build and Push
+  prepare:
+    name: Prepare Tag
     runs-on: ubuntu-latest
+    outputs:
+      latest_tag: ${{ steps.minio.outputs.latest_tag }}
+      sanitized_tag: ${{ steps.minio.outputs.sanitized_tag }}
+      exists: ${{ steps.check-manifest.outputs.exists }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Fetch MinIO source
-        id: minio
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --filter=blob:none --tags https://github.com/minio/minio.git minio
-          cd minio
-          latest_tag=$(git describe --tags "$(git rev-list --tags --max-count=1)")
-          git checkout "$latest_tag"
-          sanitized_tag=$(echo "$latest_tag" | tr '[:upper:]' '[:lower:]')
-          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
-          echo "sanitized_tag=$sanitized_tag" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -49,6 +40,19 @@ jobs:
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
 
+      - name: Fetch MinIO source
+        id: minio
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --tags https://github.com/minio/minio.git minio
+          cd minio
+          latest_tag=$(git describe --tags "$(git rev-list --tags --max-count=1)")
+          git checkout "$latest_tag"
+          sanitized_tag=$(echo "$latest_tag" | tr '[:upper:]' '[:lower:]')
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "sanitized_tag=$sanitized_tag" >> "$GITHUB_OUTPUT"
+
       - name: Check if release tag already published
         id: check-manifest
         shell: bash
@@ -61,85 +65,102 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+  build:
+    name: Build and Push (${{ matrix.arch }})
+    needs: prepare
+    if: needs.prepare.outputs.exists != 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    matrix:
+      arch: [amd64, arm64, arm, ppc64le, s390x, riscv64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Fetch MinIO source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --tags https://github.com/minio/minio.git minio
+          cd minio
+          git checkout "${{ needs.prepare.outputs.latest_tag }}"
+
       - name: Set up Go
-        if: steps.check-manifest.outputs.exists != 'true'
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.x'
           check-latest: true
 
-      - name: Build linux/amd64 binary
-        if: steps.check-manifest.outputs.exists != 'true'
+      - name: Build binary (${{ matrix.arch }})
         shell: bash
         run: |
           set -euo pipefail
           cd minio
-          export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+          export CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }}
           LDFLAGS=$(go run buildscripts/gen-ldflags.go)
           go build -tags kqueue -trimpath --ldflags "$LDFLAGS" -o ./minio .
+          file ./minio || true
 
-      - name: Build and push linux/amd64 image (upstream Dockerfile.scratch)
-        if: steps.check-manifest.outputs.exists != 'true'
+      - name: Build and push image (${{ matrix.arch }})
         uses: docker/build-push-action@v5
         with:
           context: ./minio
           file: ./minio/Dockerfile.scratch
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           push: true
           provenance: false
+          no-cache: true
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.minio.outputs.sanitized_tag }}-amd64
+            ${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-${{ matrix.arch }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.minio.outputs.latest_tag }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.latest_tag }}
 
-      - name: Build linux/arm64 binary
-        if: steps.check-manifest.outputs.exists != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd minio
-          export CGO_ENABLED=0 GOOS=linux GOARCH=arm64
-          LDFLAGS=$(go run buildscripts/gen-ldflags.go)
-          go build -tags kqueue -trimpath --ldflags "$LDFLAGS" -o ./minio .
+  manifest:
+    name: Create Manifest
+    needs: [prepare, build]
+    if: needs.prepare.outputs.exists != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build and push linux/arm64 image (upstream Dockerfile.scratch)
-        if: steps.check-manifest.outputs.exists != 'true'
-        uses: docker/build-push-action@v5
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          context: ./minio
-          file: ./minio/Dockerfile.scratch
-          platforms: linux/arm64
-          push: true
-          provenance: false
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.minio.outputs.sanitized_tag }}-arm64
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.minio.outputs.latest_tag }}
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Create and push multi-arch manifest
-        if: steps.check-manifest.outputs.exists == 'false'
         shell: bash
-        env:
-          SANITIZED_TAG: ${{ steps.minio.outputs.sanitized_tag }}
         run: |
           set -euo pipefail
           docker buildx imagetools create \
-            -t "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}" \
-            "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}-amd64" \
-            "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}-arm64"
+            -t "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-amd64" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-arm64"
           docker buildx imagetools create \
             -t "${{ env.IMAGE_NAME }}:latest" \
-            "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}-amd64" \
-            "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}-arm64"
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-amd64" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-arm64"
 
       - name: Publish summary
         shell: bash
         run: |
-          if [ "${{ steps.check-manifest.outputs.exists }}" = "true" ]; then
-            echo "MinIO release ${{ steps.minio.outputs.latest_tag }} already exists in ${{ env.IMAGE_NAME }}." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Published ${{ env.IMAGE_NAME }}:${{ steps.minio.outputs.sanitized_tag }} from MinIO release ${{ steps.minio.outputs.latest_tag }}." >> "$GITHUB_STEP_SUMMARY"
+          echo "Published ${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }} (amd64, arm64) from MinIO release ${{ needs.prepare.outputs.latest_tag }}." >> "$GITHUB_STEP_SUMMARY"
