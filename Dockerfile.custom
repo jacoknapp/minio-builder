@@ -1,0 +1,27 @@
+FROM alpine:latest
+
+ARG TARGETARCH
+
+# Install minimal dependencies
+RUN apk add --no-cache ca-certificates
+
+# Copy the pre-built binary
+COPY ./minio /usr/bin/minio
+
+# Copy docker entrypoint script
+COPY ./dockerscripts/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
+
+# Make executable
+RUN chmod +x /usr/bin/minio /usr/bin/docker-entrypoint.sh
+
+# Create minio user/group
+RUN addgroup -g 1000 minio && \
+    adduser -D -u 1000 -G minio minio
+
+EXPOSE 9000 9001
+
+ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
+
+VOLUME ["/data"]
+
+CMD ["minio"]
