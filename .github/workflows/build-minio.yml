@@ -72,8 +72,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-    matrix:
-      arch: [amd64, arm64, arm, ppc64le, s390x, riscv64]
+      matrix:
+        arch: [amd64, arm64, arm, ppc64le, s390x, riscv64]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -154,13 +154,21 @@ jobs:
           docker buildx imagetools create \
             -t "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}" \
             "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-amd64" \
-            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-arm64"
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-arm64" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-arm" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-ppc64le" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-s390x" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-riscv64"
           docker buildx imagetools create \
             -t "${{ env.IMAGE_NAME }}:latest" \
             "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-amd64" \
-            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-arm64"
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-arm64" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-arm" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-ppc64le" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-s390x" \
+            "${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }}-riscv64"
 
       - name: Publish summary
         shell: bash
         run: |
-          echo "Published ${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }} (amd64, arm64) from MinIO release ${{ needs.prepare.outputs.latest_tag }}." >> "$GITHUB_STEP_SUMMARY"
+          echo "Published ${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.sanitized_tag }} (amd64, arm64, arm, ppc64le, s390x, riscv64) from MinIO release ${{ needs.prepare.outputs.latest_tag }}." >> "$GITHUB_STEP_SUMMARY"
