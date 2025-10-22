@@ -110,8 +110,9 @@ jobs:
         run: |
           set -euo pipefail
           cd minio
-          export CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }}
+          # Run gen-ldflags with host architecture, then build for target architecture
           LDFLAGS=$(go run buildscripts/gen-ldflags.go)
+          export CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }}
           go build -tags kqueue -trimpath --ldflags "$LDFLAGS" -o ./minio .
           file ./minio || true
 
