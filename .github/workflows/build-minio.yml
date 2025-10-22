@@ -13,7 +13,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/jacoknapp/minio-builder
+  IMAGE_NAME: ghcr.io/jacoknapp/minio
 
 jobs:
   build-and-push:
