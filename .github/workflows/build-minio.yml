@@ -23,16 +23,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get latest MinIO release
+      - name: Fetch MinIO source
         id: minio
         shell: bash
         run: |
           set -euo pipefail
-          # Get latest release tag from GitHub API
-          latest_tag=$(curl -s https://api.github.com/repos/minio/minio/releases/latest | jq -r '.tag_name')
+          git clone --filter=blob:none --tags https://github.com/minio/minio.git minio
+          cd minio
+          latest_tag=$(git describe --tags "$(git rev-list --tags --max-count=1)")
+          git checkout "$latest_tag"
           sanitized_tag=$(echo "$latest_tag" | tr '[:upper:]' '[:lower:]')
           echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
           echo "sanitized_tag=$sanitized_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -56,22 +61,80 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create and push multi-arch manifest
+      - name: Set up Go
+        if: steps.check-manifest.outputs.exists != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          check-latest: true
+
+      - name: Build linux/amd64 binary
         if: steps.check-manifest.outputs.exists != 'true'
         shell: bash
+        run: |
+          set -euo pipefail
+          cd minio
+          export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+          LDFLAGS=$(go run buildscripts/gen-ldflags.go)
+          go build -tags kqueue -trimpath --ldflags "$LDFLAGS" -o ./minio .
+
+      - name: Build and push linux/amd64 image (upstream Dockerfile.scratch)
+        if: steps.check-manifest.outputs.exists != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./minio
+          file: ./minio/Dockerfile.scratch
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.minio.outputs.sanitized_tag }}-amd64
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.minio.outputs.latest_tag }}
+
+      - name: Build linux/arm64 binary
+        if: steps.check-manifest.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd minio
+          export CGO_ENABLED=0 GOOS=linux GOARCH=arm64
+          LDFLAGS=$(go run buildscripts/gen-ldflags.go)
+          go build -tags kqueue -trimpath --ldflags "$LDFLAGS" -o ./minio .
+
+      - name: Build and push linux/arm64 image (upstream Dockerfile.scratch)
+        if: steps.check-manifest.outputs.exists != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./minio
+          file: ./minio/Dockerfile.scratch
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.minio.outputs.sanitized_tag }}-arm64
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.minio.outputs.latest_tag }}
+
+      - name: Create and push multi-arch manifest
+        if: steps.check-manifest.outputs.exists == 'false'
+        shell: bash
         env:
-          SOURCE_TAG: ${{ steps.minio.outputs.latest_tag }}
           SANITIZED_TAG: ${{ steps.minio.outputs.sanitized_tag }}
         run: |
           set -euo pipefail
-          
-          # Create and push manifest for versioned tag
-          docker buildx imagetools create -t ${{ env.IMAGE_NAME }}:${SANITIZED_TAG} \
-            minio/minio:${SOURCE_TAG}
-          
-          # Create and push manifest for latest tag
-          docker buildx imagetools create -t ${{ env.IMAGE_NAME }}:latest \
-            minio/minio:${SOURCE_TAG}
+          docker buildx imagetools create \
+            -t "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}" \
+            "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}-amd64" \
+            "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}-arm64"
+          docker buildx imagetools create \
+            -t "${{ env.IMAGE_NAME }}:latest" \
+            "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}-amd64" \
+            "${{ env.IMAGE_NAME }}:${SANITIZED_TAG}-arm64"
 
       - name: Publish summary
         shell: bash
