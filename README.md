@@ -10,6 +10,6 @@ ghcr.io/jacoknapp/minio:latest
 
 More tags listed under packages
 
-latest: latest release
-release: Release specific tags
-release-arch: Release specific tag for a given architecture
+**latest**: latest release\
+**release**: Release specific tags\
+**release-arch**: Release specific tag for a given architecture
